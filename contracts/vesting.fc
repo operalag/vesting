@@ -1,0 +1,284 @@
+;; =============== Vesting Contract =====================
+#pragma version =0.4.6;
+#include "imports/stdlib.fc";
+
+;; =============== consts =============================
+
+const int LOCKUP_CONTRACT_GAS_USAGE = 10000; ;; 8232 with the reserve
+const int LOCKUP_CONTRACT_STATE_MAX_CELLS = 22;
+const int LOCKUP_CONTRACT_STATE_MAX_BITS = 7625;
+
+;; max in context of this contract
+const int TRANSFER_PAYLOAD_MAX_BITS = 768; ;; 32 + 64 + 124 + 267 + 267 + 1 + 12 + 1
+const int TRANSFER_PAYLOAD_MAX_CELLS = 1;
+
+const int JETTON_WALLET_COMPUTE_FEE = 15000000;
+const int JETTON_WALLET_GAS_USAGE = 15000; ;; https://github.com/ton-blockchain/token-contract/blob/21e7844fa6dbed34e0f4c70eb5f0824409640a30/ft/jetton-wallet.fc#L22C28-L22C36
+const int JETTON_WALLET_INIT_CELLS = 21;
+const int JETTON_WALLET_INIT_BITS = 7250;
+const int JETTON_WALLET_INIT_MAX_CELLS = 21;
+const int JETTON_WALLET_STATE_MAX_BITS = 7480;
+const int JETTON_WALLET_STORAGE = 10000000; ;; https://github.com/ton-blockchain/token-contract/blob/21e7844fa6dbed34e0f4c70eb5f0824409640a30/ft/jetton-wallet.fc#L15C33-L15C41
+
+const int ONE_YEAR = 60 * 60 * 24 * 365;
+const int ELEVEN_YEARS = 60 * 60 * 24 * 365 * 11;
+
+;; admin ops
+const int OP::SEND_SERVICE_MESSAGE = 0x000a3c66;
+
+;; jetton ops
+const int OP::JETTON_TRANSFER = 0xf8a7ea5;
+
+;; claimer ops
+const int OP::CLAIM_JETTONS = 0x3651a88c;
+
+;; errors
+const int ERROR::NOT_FROM_ADMIN = 101;
+const int ERROR::NOT_FROM_CLAIMER = 102;
+const int ERROR::NOT_ENOUGH_TON = 103;
+const int ERROR::NOTHING_TO_CLAIM = 104;
+const int ERROR::INVALID_VESTING_PERIOD = 105;
+const int ERROR::LOCKUP_NOT_FINISHED = 106;
+
+;; global
+global int init?;
+global slice admin_address;
+global slice claimer_address;
+global slice jetton_wallet_address;
+global int jetton_balance;
+global int jettons_claimed;
+global int last_claimed;
+global int cliff_end_date;
+global int cliff_numerator;
+global int cliff_denominator;
+global int cliff_unlock_amount;
+global int vesting_period;
+global int distribution_frequency;
+
+;; =============== storage =============================
+
+() load_data() impure inline_ref {
+    slice ds = get_data().begin_parse();
+    admin_address = ds~load_msg_addr();
+    claimer_address = ds~load_msg_addr();
+
+    if (slice_empty?(ds)) {
+        init? = false;
+        return ();
+    }
+    init? = true;
+
+    jetton_wallet_address = ds~load_msg_addr();
+    jetton_balance = ds~load_coins();
+    jettons_claimed = ds~load_uint(64);
+    last_claimed = ds~load_uint(32);
+
+    slice vesting_data = ds~load_ref().begin_parse();
+    cliff_end_date = vesting_data~load_uint(32);
+    cliff_numerator = vesting_data~load_uint(16);
+    cliff_denominator = vesting_data~load_uint(16);
+    cliff_unlock_amount = vesting_data~load_coins();
+    vesting_period = vesting_data~load_uint(32);
+    distribution_frequency = vesting_data~load_uint(32);
+
+    vesting_data.end_parse();
+    ds.end_parse();
+}
+
+() save_data() impure inline_ref {
+    set_data(
+        begin_cell()
+            .store_slice(admin_address)
+            .store_slice(claimer_address)
+            .store_slice(jetton_wallet_address)
+            .store_coins(jetton_balance)
+            .store_uint(jettons_claimed, 64)
+            .store_uint(last_claimed, 32)
+            .store_ref(
+                begin_cell()
+                    .store_uint(cliff_end_date, 32)
+                    .store_uint(cliff_numerator, 16)
+                    .store_uint(cliff_denominator, 16)
+                    .store_coins(cliff_unlock_amount)
+                    .store_uint(vesting_period, 32)
+                    .store_uint(distribution_frequency, 32)
+                .end_cell()
+            )
+        .end_cell()
+    );
+}
+
+;; =============== utils =============================
+
+int claimable_jettons() inline {
+    if (now() < cliff_end_date) {
+        return 0;
+    }
+
+    int claimable = 0;
+
+    int time_since_cliff = now() - cliff_end_date;
+
+    int periods_passed = time_since_cliff / distribution_frequency;
+
+    int total_vesting_jettons = jetton_balance - cliff_unlock_amount;
+    (int jettons_per_period, _) = divmod(total_vesting_jettons, vesting_period / distribution_frequency);
+
+    int total_unlocked = min(cliff_unlock_amount + (periods_passed * jettons_per_period), jetton_balance);
+
+    claimable = total_unlocked - jettons_claimed;
+
+    if (now() >= cliff_end_date + vesting_period) {
+        return jetton_balance - jettons_claimed;
+    }
+
+    return min(claimable, jetton_balance);
+}
+
+int min_fee() inline {
+    return
+        get_compute_fee(BASECHAIN, LOCKUP_CONTRACT_GAS_USAGE) +
+        ;; lockup -> lockup_wallet -> user_wallet -> user_wallet -> user (notification)
+        get_forward_fee(BASECHAIN, TRANSFER_PAYLOAD_MAX_BITS, TRANSFER_PAYLOAD_MAX_CELLS) * 3 +
+        ;; lockup_wallet -> user_wallet (with state init)
+        get_simple_forward_fee(BASECHAIN, JETTON_WALLET_INIT_BITS, JETTON_WALLET_INIT_CELLS) +
+        ;; lockup_wallet + user_wallet
+        max(get_compute_fee(BASECHAIN, JETTON_WALLET_GAS_USAGE), JETTON_WALLET_COMPUTE_FEE) * 2 +
+        ;; user_wallet
+        max(get_storage_fee(BASECHAIN, ONE_YEAR, JETTON_WALLET_STATE_MAX_BITS, JETTON_WALLET_INIT_MAX_CELLS), JETTON_WALLET_STORAGE);
+}
+
+;; =============== recv =============================
+
+() recv_internal(int msg_value, cell in_msg_full, slice in_msg_body) impure {
+    slice cs = in_msg_full.begin_parse();
+    int flags = cs~load_msg_flags();
+
+    if (is_bounced(flags)) {
+        in_msg_body~skip_op();
+        int op = in_msg_body~load_op();
+        if (op == OP::JETTON_TRANSFER) {
+            in_msg_body~skip_query_id();
+            int amount = in_msg_body~load_coins();
+            jettons_claimed -= amount;
+            jetton_balance += amount;
+            save_data();
+            return ();
+        }
+        return ();
+    }
+
+    slice sender_address = cs~load_msg_addr();
+    (int sender_wc, _) = parse_std_addr(sender_address);
+    throw_unless(ERROR::NOT_BASECHAIN, sender_wc == BASECHAIN);
+    load_data();
+
+    ifnot (init?) {
+        throw_unless(ERROR::NOT_FROM_ADMIN, equal_slices(sender_address, admin_address));
+        jetton_balance = in_msg_body~load_coins();
+        jettons_claimed = 0;
+        last_claimed = 0;
+
+        jetton_wallet_address = in_msg_body~load_msg_addr();
+        cliff_end_date = in_msg_body~load_uint(32);
+        cliff_numerator = in_msg_body~load_uint(16);
+        cliff_denominator = in_msg_body~load_uint(16);
+        vesting_period = in_msg_body~load_uint(32);
+        distribution_frequency = in_msg_body~load_uint(32);
+        in_msg_body.end_parse();
+
+        throw_unless(ERROR::INVALID_VESTING_PERIOD, vesting_period > 0);
+
+        cliff_unlock_amount = muldiv(jetton_balance, cliff_numerator, cliff_denominator);
+
+        raw_reserve(get_storage_fee(BASECHAIN, ELEVEN_YEARS, LOCKUP_CONTRACT_STATE_MAX_BITS, LOCKUP_CONTRACT_STATE_MAX_CELLS), RESERVE_MODE::REGULAR + RESERVE_MODE::BOUNCE_ON_ACTION_FAIL);
+        send_raw_message(begin_cell()
+            .store_msg_flags_and_address_none(FLAGS::NON_BOUNCEABLE)
+            .store_slice(sender_address)
+            .store_coins(0)
+            .store_uint(MSG_BODY_NOT_IN_REF, MSG_ONLY_BODY_SIZE)
+        .end_cell(), SEND_MODE::CARRY_ALL_BALANCE + SEND_MODE::IGNORE_ERRORS);
+        save_data();
+        return ();
+    }
+
+    (int op, int query_id) = in_msg_body~load_op_and_query_id();
+
+    if (op == OP::CLAIM_JETTONS) {
+        in_msg_body.end_parse();
+        throw_unless(ERROR::NOT_FROM_CLAIMER, equal_slices(sender_address, claimer_address));
+        throw_unless(ERROR::NOT_ENOUGH_TON, msg_value >= min_fee());
+        int claimable_jettons = claimable_jettons();
+        throw_unless(ERROR::NOTHING_TO_CLAIM, claimable_jettons > 0);
+
+        cell transfer_payload = begin_cell()
+            .store_op(OP::JETTON_TRANSFER)
+            .store_query_id(query_id)
+            .store_coins(claimable_jettons)
+            .store_slice(sender_address)
+            .store_slice(sender_address)
+            .store_bool(false)
+            .store_coins(1)
+            .store_bool(false)
+        .end_cell();
+        cell msg = begin_cell()
+            .store_msg_flags_and_address_none(FLAGS::BOUNCEABLE)
+            .store_slice(jetton_wallet_address)
+            .store_coins(0)
+            .store_uint(MSG_BODY_IN_REF, MSG_ONLY_BODY_SIZE)
+            .store_ref(transfer_payload)
+        .end_cell();
+        send_raw_message(msg, SEND_MODE::CARRY_ALL_REMAINING_MESSAGE_VALUE + SEND_MODE::BOUNCE_ON_ACTION_FAIL);
+
+        jettons_claimed += claimable_jettons;
+        last_claimed = now();
+        jetton_balance -= claimable_jettons;
+        save_data();
+        return ();
+    }
+
+    if (op == OP::SEND_SERVICE_MESSAGE) {
+        throw_unless(ERROR::NOT_FROM_ADMIN, equal_slices(sender_address, admin_address));
+        throw_unless(ERROR::LOCKUP_NOT_FINISHED, jetton_balance == 0);
+        send_raw_message(in_msg_body~load_ref(), in_msg_body~load_uint(8));
+        in_msg_body.end_parse();
+        return ();
+    }
+    throw(ERROR::UNKNOWN_OP);
+}
+
+;; =============== getters =============================
+
+(int, slice, slice, int, int, int) get_lockup_data() method_id {
+    load_data();
+    return (
+        init?,
+        admin_address,
+        claimer_address,
+        jetton_balance,
+        jettons_claimed,
+        last_claimed
+    );
+}
+
+(slice, int, int, int, int, int, int) get_vesting_data() method_id {
+    load_data();
+    return (
+        jetton_wallet_address,
+        cliff_end_date,
+        cliff_numerator,
+        cliff_denominator,
+        cliff_unlock_amount,
+        vesting_period,
+        distribution_frequency
+    );
+}
+
+int get_claimable_jettons() method_id {
+    load_data();
+    return claimable_jettons();
+}
+
+int get_min_fee() method_id {
+    return min_fee();
+}
