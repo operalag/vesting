@@ -36,18 +36,22 @@ export function ClaimButton({ contractAddress }: ClaimButtonProps) {
       const address = Address.parse(contractAddress);
       const contract = client.open(Vesting.createFromAddress(address));
       
-      const [lockupData, claimableJettons, minFeeAmount] = await Promise.all([
-        contract.getLockupData(),
-        contract.getClaimableJettons(),
-        contract.getMinFee(),
-      ]);
-
-      const userAddr = Address.parse(userAddress);
-      const isUserClaimer = lockupData.claimerAddress.equals(userAddr);
-      
-      setIsAuthorized(isUserClaimer);
-      setClaimableAmount(claimableJettons);
-      setMinFee(minFeeAmount);
+      try {
+        const lockupData = await contract.getLockupData();
+        if (!lockupData.init) {
+          setIsAuthorized(false);
+          return;
+        const userAddr = Address.parse(userAddress);
+        const isUserClaimer = lockupData.claimerAddress.equals(userAddr);
+        
+        setIsAuthorized(isUserClaimer);
+        setClaimableAmount(claimableJettons);
+        setMinFee(minFeeAmount);
+      } catch (contractError) {
+        console.error('Contract interaction error:', contractError);
+        setIsAuthorized(false);
+        setError('Unable to interact with contract');
+      }
     } catch (err) {
       console.error('Error checking claim status:', err);
       setError('Failed to check claim status');

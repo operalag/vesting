@@ -61,13 +61,24 @@ export function DeploymentForm() {
   };
 
   const handleDeploy = async () => {
-    if (!client || !userAddress || !validateForm()) return;
+    if (!client || !userAddress) {
+      setError('Please connect your wallet first');
+      return;
+    }
+    
+    if (!validateForm()) return;
 
     setLoading(true);
     setError(null);
     setDeployedAddress(null);
 
     try {
+      // Note: This is a demo implementation
+      // In production, you would need the actual compiled contract code
+      setError('Contract deployment is not available in demo mode. This would require the compiled contract bytecode.');
+      return;
+      
+      /* Production deployment code would look like this:
       const adminAddress = Address.parse(userAddress);
       const claimerAddress = Address.parse(formData.claimerAddress);
       
@@ -77,7 +88,7 @@ export function DeploymentForm() {
             adminAddress,
             claimerAddress,
           },
-          await Vesting.getCode() // You'll need to implement this
+          await getCompiledContractCode() // Would load actual compiled code
         )
       );
 
@@ -108,6 +119,7 @@ export function DeploymentForm() {
 
       await tonConnectUI.sendTransaction(transaction);
       setDeployedAddress(vesting.address.toString());
+      */
       
     } catch (err) {
       console.error('Error deploying contract:', err);

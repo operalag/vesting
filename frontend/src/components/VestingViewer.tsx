@@ -59,6 +59,7 @@ export function VestingViewer() {
                   ? 'border-red-300 focus:ring-red-500' 
                   : ''
               }`}
+              autoComplete="off"
             />
             {contractAddress && !isValidAddress && (
               <p className="text-red-500 text-sm mt-1">

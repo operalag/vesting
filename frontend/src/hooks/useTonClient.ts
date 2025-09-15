@@ -6,12 +6,16 @@ export function useTonClient() {
 
   useEffect(() => {
     // Initialize TON client with mainnet endpoint
-    const tonClient = new TonClient({
-      endpoint: 'https://toncenter.com/api/v2/jsonRPC',
-      apiKey: undefined, // You might want to add an API key for production
-    });
+    try {
+      const tonClient = new TonClient({
+        endpoint: 'https://toncenter.com/api/v2/jsonRPC',
+        apiKey: undefined, // You might want to add an API key for production
+      });
 
-    setClient(tonClient);
+      setClient(tonClient);
+    } catch (error) {
+      console.error('Failed to initialize TON client:', error);
+    }
   }, []);
 
   return { client };

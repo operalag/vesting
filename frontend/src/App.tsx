@@ -4,6 +4,7 @@ import { VestingViewer } from './components/VestingViewer';
 import { DeploymentForm } from './components/DeploymentForm';
 import { useState } from 'react';
 
+// Using a demo manifest URL - in production you would host your own manifest
 const manifestUrl = 'https://ton-connect.github.io/demo-dapp-with-react-ui/tonconnect-manifest.json';
 
 function App() {

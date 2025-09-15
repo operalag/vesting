@@ -30,17 +30,31 @@ export function ContractInfo({ contractAddress }: ContractInfoProps) {
       const address = Address.parse(contractAddress);
       const contract = client.open(Vesting.createFromAddress(address));
       
-      const [lockupData, vestingData, claimableJettons] = await Promise.all([
-        contract.getLockupData(),
-        contract.getVestingData(),
-        contract.getClaimableJettons(),
-      ]);
+      // Check if contract exists and is initialized
+      try {
+        const lockupData = await contract.getLockupData();
+        if (!lockupData.init) {
+          setError('Contract is not initialized');
+          return;
+        }
+        
+        const vestingData = await contract.getVestingData();
+        const claimableJettons = await contract.getClaimableJettons();
+      }
 
-      setContractData({
-        lockupData,
-        vestingData,
-        claimableJettons,
-      });
+      const lockupData = await contract.getLockupData();
+      const claimableJettons = await contract.getClaimableJettons();
+      const minFeeAmount = await contract.getMinFee();
+
+        setContractData({
+          lockupData,
+          vestingData,
+          claimableJettons,
+        });
+      } catch (contractError) {
+        setError('Failed to read contract data. Contract may not be properly deployed.');
+        return;
+      }
     } catch (err) {
       console.error('Error loading contract data:', err);
       setError('Failed to load contract data. Please check the address and try again.');
