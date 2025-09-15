@@ -41,6 +41,7 @@ export function ClaimButton({ contractAddress }: ClaimButtonProps) {
         if (!lockupData.init) {
           setIsAuthorized(false);
           return;
+        }
         const userAddr = Address.parse(userAddress);
         const isUserClaimer = lockupData.claimerAddress.equals(userAddr);
         
