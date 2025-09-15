@@ -40,7 +40,7 @@ export function ContractInfo({ contractAddress }: ContractInfoProps) {
         
         const vestingData = await contract.getVestingData();
         const claimableJettons = await contract.getClaimableJettons();
-      }
+      
 
       const lockupData = await contract.getLockupData();
       const claimableJettons = await contract.getClaimableJettons();
