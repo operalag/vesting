@@ -6,6 +6,11 @@
         "build": "blueprint build",
         "test": "jest --verbose"
     },
+    "dependencies": {
+        "react": "^19.1.1",
+        "react-dom": "^19.1.1",
+        "@ton/ton": "^15.1.0"
+    },
     "devDependencies": {
         "@ton/blueprint": "^0.28.0",
         "@ton/sandbox": "^0.24.0",
